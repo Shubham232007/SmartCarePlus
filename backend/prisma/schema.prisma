@@ -1,0 +1,251 @@
+// SMARTCARE+ Prisma Schema (SQLite / Multi-Database Compatible)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String    @id @default(uuid())
+  email        String    @unique
+  passwordHash String
+  role         String    @default("PATIENT") // PATIENT, DOCTOR, ADMIN
+  firstName    String
+  lastName     String
+  phone        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLogin    DateTime?
+  isActive     Boolean   @default(true)
+
+  patient   Patient?
+  doctor    Doctor?
+  auditLogs AuditLog[]
+}
+
+model Patient {
+  id                    String   @id @default(uuid())
+  userId                String   @unique
+  patientId             String   @unique // e.g., PAT-1001
+  dateOfBirth           String
+  gender                String
+  bloodGroup            String
+  phone                 String?
+  address               String?
+  emergencyContactName  String
+  emergencyContactPhone String
+  medicalConditions     String?
+  allergies             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  doctorAssignments DoctorPatientAssignment[]
+  devices           Device[]
+  vitalReadings     VitalReading[]
+  alerts            Alert[]
+  medicines         Medicine[]
+  medicineLogs      MedicineLog[]
+  voiceInteractions VoiceInteraction[]
+  emergencyEvents   EmergencyEvent[]
+  clinicalNotes     ClinicalNote[]
+}
+
+model Doctor {
+  id             String   @id @default(uuid())
+  userId         String   @unique
+  doctorId       String   @unique // e.g., DOC-1001
+  specialization String
+  licenseNumber  String
+  department     String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  patientAssignments DoctorPatientAssignment[]
+  clinicalNotes      ClinicalNote[]
+}
+
+model DoctorPatientAssignment {
+  id         String   @id @default(uuid())
+  doctorId   String
+  patientId  String
+  assignedAt DateTime @default(now())
+  status     String   @default("ACTIVE") // ACTIVE, INACTIVE
+
+  doctor  Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@unique([doctorId, patientId])
+}
+
+model Device {
+  id              String    @id @default(uuid())
+  deviceId        String    @unique // e.g., SC-ESP32-001
+  deviceName      String
+  patientId       String?
+  deviceType      String    @default("ESP32_BEDSIDE")
+  firmwareVersion String    @default("1.0.0")
+  macAddress      String?
+  deviceKey       String    @default(uuid())
+  status          String    @default("OFFLINE") // ONLINE, OFFLINE, WARNING
+  lastSeen        DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  patient Patient? @relation(fields: [patientId], references: [id], onDelete: SetNull)
+
+  vitalReadings     VitalReading[]
+  alerts            Alert[]
+  voiceInteractions VoiceInteraction[]
+  emergencyEvents   EmergencyEvent[]
+}
+
+model VitalReading {
+  id          String   @id @default(uuid())
+  patientId   String
+  deviceId    String
+  heartRate   Float
+  spo2        Float
+  temperature Float
+  recordedAt  DateTime @default(now())
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  device  Device  @relation(fields: [deviceId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, recordedAt])
+  @@index([deviceId, recordedAt])
+}
+
+model Alert {
+  id             String    @id @default(uuid())
+  patientId      String
+  deviceId       String?
+  type           String    // HIGH_HEART_RATE, LOW_HEART_RATE, LOW_SPO2, HIGH_TEMPERATURE, LOW_TEMPERATURE, SOS, MEDICINE_MISSED, DEVICE_OFFLINE, AI_REQUEST, NURSE_CALL
+  severity       String    // INFO, WARNING, CRITICAL
+  title          String
+  message        String
+  heartRate      Float?
+  spo2           Float?
+  temperature    Float?
+  createdAt      DateTime  @default(now())
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  status         String    @default("ACTIVE") // ACTIVE, ACKNOWLEDGED, RESOLVED
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  device  Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  @@index([patientId, createdAt])
+  @@index([status])
+}
+
+model Medicine {
+  id           String    @id @default(uuid())
+  patientId    String
+  name         String
+  dosage       String
+  frequency    String
+  instructions String?
+  startDate    DateTime
+  endDate      DateTime?
+  createdAt    DateTime  @default(now())
+
+  patient   Patient            @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  schedules MedicineSchedule[]
+  logs      MedicineLog[]
+}
+
+model MedicineSchedule {
+  id            String  @id @default(uuid())
+  medicineId    String
+  scheduledTime String  // HH:mm format e.g. "08:00"
+  daysOfWeek    String  // CSV e.g., "MON,TUE,WED,THU,FRI,SAT,SUN"
+  isActive      Boolean @default(true)
+
+  medicine Medicine @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+}
+
+model MedicineLog {
+  id          String    @id @default(uuid())
+  medicineId  String
+  patientId   String
+  scheduledAt DateTime
+  takenAt     DateTime?
+  status      String    @default("PENDING") // PENDING, TAKEN, MISSED, SKIPPED
+  confirmedBy String?
+
+  medicine Medicine @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  patient  Patient  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, scheduledAt])
+}
+
+model VoiceInteraction {
+  id         String   @id @default(uuid())
+  patientId  String
+  deviceId   String?
+  transcript String
+  aiResponse String
+  timestamp  DateTime @default(now())
+  status     String   @default("COMPLETED")
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  device  Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+}
+
+model EmergencyEvent {
+  id          String    @id @default(uuid())
+  patientId   String
+  deviceId    String?
+  triggerType String    // SOS_BUTTON, ABNORMAL_VITAL, VOICE_REQUEST, NURSE_CALL
+  description String
+  createdAt   DateTime  @default(now())
+  respondedAt DateTime?
+  respondedBy String?
+  status      String    @default("PENDING") // PENDING, ACKNOWLEDGED, RESOLVED, CANCELLED
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  device  Device? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+}
+
+model ClinicalNote {
+  id        String   @id @default(uuid())
+  patientId String
+  doctorId  String
+  note      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  patient Patient @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  doctor  Doctor  @relation(fields: [doctorId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?
+  action     String
+  entityType String
+  entityId   String?
+  ipAddress  String?
+  timestamp  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model ThresholdConfig {
+  id              String   @id @default("default")
+  minHeartRate    Float    @default(50)
+  maxHeartRate    Float    @default(120)
+  minSpo2Warning  Float    @default(94)
+  minSpo2Critical Float    @default(90)
+  minTemp         Float    @default(36.0)
+  maxTemp         Float    @default(38.0)
+  updatedAt       DateTime @updatedAt
+}
