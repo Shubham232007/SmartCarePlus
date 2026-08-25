@@ -20,7 +20,7 @@ CORS(app)
 
 def get_openai_client():
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
-    if not api_key or api_key == "your_openai_api_key_here":
+    if not api_key or api_key == "OPENAI_API_KEY":
         return None
     try:
         from openai import OpenAI
