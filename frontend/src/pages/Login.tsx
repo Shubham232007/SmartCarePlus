@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { Activity, Lock, Mail, UserCheck, Shield, Heart } from 'lucide-react';
+import { Activity, Lock, Mail, UserCheck, Shield, Heart, Info, Sparkles } from 'lucide-react';
+import { ProjectOverviewModal } from '../components/common/ProjectOverviewModal';
 
 export const Login: React.FC = () => {
   const [email, setEmail] = useState<string>('patient@smartcare.local');
   const [password, setPassword] = useState<string>('Patient@123456');
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isOverviewOpen, setIsOverviewOpen] = useState<boolean>(false);
 
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -38,6 +40,22 @@ export const Login: React.FC = () => {
       <div className="absolute -top-40 -left-40 w-96 h-96 bg-teal-500/20 rounded-full blur-3xl" />
       <div className="absolute -bottom-40 -right-40 w-96 h-96 bg-sky-500/20 rounded-full blur-3xl" />
 
+      {/* Top Header Floating Navigation Bar */}
+      <div className="absolute top-6 left-0 right-0 px-6 max-w-7xl mx-auto flex items-center justify-between z-20">
+        <div className="flex items-center gap-2">
+          <Activity className="w-6 h-6 text-teal-400" />
+          <span className="text-sm font-bold text-white tracking-wider">SMARTCARE+</span>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsOverviewOpen(true)}
+          className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-teal-300 border border-teal-500/30 text-xs font-bold transition shadow-lg backdrop-blur-md"
+        >
+          <Sparkles className="w-4 h-4 text-teal-400" />
+          <span>Project Overview</span>
+        </button>
+      </div>
+
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center z-10">
         <div className="w-16 h-16 rounded-3xl bg-gradient-to-tr from-teal-500 to-emerald-400 mx-auto flex items-center justify-center text-white shadow-xl shadow-teal-500/30 mb-4">
           <Activity className="w-10 h-10 animate-pulse" />
@@ -45,9 +63,19 @@ export const Login: React.FC = () => {
 
         <h1 className="text-3xl font-black text-white tracking-tight">SMARTCARE+</h1>
         <p className="mt-1 text-sm text-teal-300 font-medium">Intelligent IoT Bedside Healthcare Assistant</p>
+
+        {/* Prominent Overview Trigger Sub-Banner */}
+        <button
+          type="button"
+          onClick={() => setIsOverviewOpen(true)}
+          className="mt-4 inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-teal-950/70 hover:bg-teal-900/80 text-teal-300 border border-teal-800/80 text-xs font-semibold transition"
+        >
+          <Info className="w-3.5 h-3.5 text-teal-400" />
+          <span>New to SmartCare+? Read Total Project Overview</span>
+        </button>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md z-10 px-4">
+      <div className="mt-6 sm:mx-auto sm:w-full sm:max-w-md z-10 px-4">
         <div className="bg-white/95 backdrop-blur-xl py-8 px-6 shadow-2xl rounded-3xl sm:px-10 border border-slate-100">
           <form className="space-y-5" onSubmit={handleLoginSubmit}>
             <div>
@@ -140,6 +168,14 @@ export const Login: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Project Overview Modal */}
+      <ProjectOverviewModal
+        isOpen={isOverviewOpen}
+        onClose={() => setIsOverviewOpen(false)}
+        onSelectDemo={handleQuickDemo}
+      />
     </div>
   );
 };
+
