@@ -57,7 +57,7 @@ export const getDoctorPatients = async (req: AuthenticatedRequest, res: Response
         bloodGroup: p.bloodGroup,
         phone: p.phone || p.user.phone,
         medicalConditions: p.medicalConditions,
-        latestVitals: latestVital || { heartRate: 75, spo2: 98, temperature: 36.6, recordedAt: new Date() },
+        latestVitals: latestVital || null,
         deviceStatus: primaryDevice ? primaryDevice.status : 'OFFLINE',
         deviceName: primaryDevice ? primaryDevice.deviceId : 'No Device',
         healthStatus,

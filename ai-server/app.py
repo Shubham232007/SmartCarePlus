@@ -135,6 +135,138 @@ def health():
     )
 
 
+def trim_pcm_silence(pcm_data: bytes, threshold: int = 150) -> bytes:
+    """Trim leading and trailing silence from 16-bit signed PCM audio."""
+    if not pcm_data or len(pcm_data) < 4:
+        return pcm_data
+
+    import struct
+    num_samples = len(pcm_data) // 2
+    samples = struct.unpack(f"<{num_samples}h", pcm_data[:num_samples * 2])
+
+    start = 0
+    while start < num_samples and abs(samples[start]) < threshold:
+        start += 1
+
+    end = num_samples - 1
+    while end > start and abs(samples[end]) < threshold:
+        end -= 1
+
+    if start >= end:
+        return pcm_data
+
+    start = max(0, start - 400)
+    end = min(num_samples - 1, end + 400)
+
+    trimmed_samples = samples[start:end + 1]
+    return struct.pack(f"<{len(trimmed_samples)}h", *trimmed_samples)
+
+
+def generate_tts_audio_pcm_s16le(text: str) -> dict:
+    """
+    Generate raw signed 16-bit little-endian PCM audio payload (pcm_s16le, 8000Hz, Mono).
+    Strips all WAV headers and returns raw PCM bytes encoded in Base64.
+    """
+    if not text:
+        print("\n[TTS DEBUG] Reply text: empty")
+        print("[TTS DEBUG] TTS generation attempted: NO")
+        print("[TTS DEBUG] Audio bytes: 0")
+        print("[TTS DEBUG] Base64 length: 0")
+        print("[TTS DEBUG] Response JSON keys: audioBase64, audioFormat, sampleRate, channels")
+        return {"audioBase64": "", "audioFormat": "pcm_s16le", "sampleRate": 8000, "channels": 1, "error": "Empty text"}
+
+    raw_pcm = None
+    error_msg = None
+
+    # 1. Try OpenAI API if client is available
+    client = get_openai_client()
+    if client is not None:
+        try:
+            response = client.audio.speech.create(
+                model="tts-1",
+                voice="alloy",
+                input=text,
+                response_format="pcm" # OpenAI returns 24kHz 16-bit mono PCM
+            )
+            openai_pcm = response.content
+            if openai_pcm and len(openai_pcm) > 0:
+                import audioop
+                raw_pcm, _ = audioop.ratecv(openai_pcm, 2, 1, 24000, 8000, None)
+        except Exception as e:
+            error_msg = f"OpenAI TTS error: {e}"
+            print(f"[TTS DEBUG] OpenAI TTS Exception: {e}")
+
+    # 2. Offline pyttsx3 fallback (Windows SAPI5 16-bit PCM)
+    if raw_pcm is None:
+        try:
+            import pyttsx3, tempfile, os, wave, audioop
+            engine = pyttsx3.init()
+            engine.setProperty('rate', 145)
+
+            with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as f:
+                wav_path = f.name
+
+            engine.save_to_file(text, wav_path)
+            engine.runAndWait()
+
+            if os.path.exists(wav_path):
+                with wave.open(wav_path, 'rb') as w:
+                    nchannels, sampwidth, framerate, nframes = w.getparams()[:4]
+                    raw_pcm = w.readframes(nframes) # Read raw PCM frames ONLY (excluding 44-byte WAV header)
+                os.remove(wav_path)
+
+                if nchannels > 1:
+                    raw_pcm = audioop.tomono(raw_pcm, sampwidth, 0.5, 0.5)
+                if sampwidth != 2:
+                    raw_pcm = audioop.lin2lin(raw_pcm, sampwidth, 2)
+                if framerate != 8000:
+                    raw_pcm, _ = audioop.ratecv(raw_pcm, 2, 1, framerate, 8000, None)
+        except Exception as e:
+            error_msg = f"pyttsx3 TTS error: {e}"
+            print(f"[TTS DEBUG] pyttsx3 TTS Exception: {e}")
+
+    if raw_pcm and len(raw_pcm) > 0:
+        # Trim leading and trailing silence
+        raw_pcm = trim_pcm_silence(raw_pcm)
+
+        # Cap raw PCM bytes to max 64KB (~32,000 samples = 4 seconds of 8kHz 16-bit mono audio = ~85KB Base64)
+        if len(raw_pcm) > 64000:
+            cutoff = 64000 - (64000 % 2)
+            raw_pcm = raw_pcm[:cutoff]
+
+        import base64
+        b64_str = base64.b64encode(raw_pcm).decode('utf-8')
+
+        print(f"\n[TTS DEBUG] Reply text: {text[:60]}")
+        print(f"[TTS DEBUG] TTS generation attempted: YES")
+        print(f"[TTS DEBUG] Audio bytes: {len(raw_pcm)}")
+        print(f"[TTS DEBUG] Base64 length: {len(b64_str)}")
+        print(f"[TTS DEBUG] Response JSON keys: audioBase64, audioFormat, sampleRate, channels")
+
+        return {
+            "audioBase64": b64_str,
+            "audioFormat": "pcm_s16le",
+            "sampleRate": 8000,
+            "channels": 1,
+            "error": None,
+        }
+
+    print(f"\n[TTS DEBUG] Reply text: {text[:60]}")
+    print(f"[TTS DEBUG] TTS generation attempted: YES")
+    print(f"[TTS DEBUG] Audio bytes: 0")
+    print(f"[TTS DEBUG] Base64 length: 0")
+    print(f"[TTS DEBUG] Response JSON keys: audioBase64, audioFormat, sampleRate, channels, error")
+    print(f"[TTS DEBUG] Error: {error_msg}")
+
+    return {
+        "audioBase64": "",
+        "audioFormat": "pcm_s16le",
+        "sampleRate": 8000,
+        "channels": 1,
+        "error": error_msg or "TTS generation failed",
+    }
+
+
 @app.route("/api/voice", methods=["POST"])
 def process_voice():
     data = request.get_json() or {}
@@ -150,6 +282,10 @@ def process_voice():
                     "success": False,
                     "error": "Missing transcript parameter",
                     "reply": "I couldn't hear your question. Please try again.",
+                    "audioBase64": "",
+                    "audioFormat": "pcm_s16le",
+                    "sampleRate": 8000,
+                    "channels": 1,
                     "intent": "UNKNOWN",
                 }
             ),
@@ -165,12 +301,17 @@ def process_voice():
     # ── If no OpenAI key, return a safe fallback ─────────────────────────────
     if client is None:
         fallback_reply = _rule_based_fallback(transcript, patient_context, is_nurse_call)
+        tts_data = generate_tts_audio_pcm_s16le(fallback_reply)
         return jsonify(
             {
                 "success": True,
                 "patientId": patient_id,
                 "transcript": transcript,
                 "reply": fallback_reply,
+                "audioBase64": tts_data["audioBase64"],
+                "audioFormat": tts_data["audioFormat"],
+                "sampleRate": tts_data["sampleRate"],
+                "channels": tts_data["channels"],
                 "intent": intent,
                 "mode": "FALLBACK_NO_API_KEY",
             }
@@ -200,6 +341,7 @@ def process_voice():
 
         ai_text = response.choices[0].message.content.strip()
         final_reply = nurse_call_prefix + ai_text
+        tts_data = generate_tts_audio_pcm_s16le(final_reply)
 
         return jsonify(
             {
@@ -207,21 +349,29 @@ def process_voice():
                 "patientId": patient_id,
                 "transcript": transcript,
                 "reply": final_reply,
+                "audioBase64": tts_data["audioBase64"],
+                "audioFormat": tts_data["audioFormat"],
+                "sampleRate": tts_data["sampleRate"],
+                "channels": tts_data["channels"],
                 "intent": intent,
                 "mode": "OPENAI_GPT4O_MINI",
             }
         )
 
     except Exception as e:
-        print(f"❌ OpenAI API Error: {type(e).__name__}: {e}")
-        # Graceful fallback — do NOT expose error details to patient
+        print(f"[OPENAI ERROR] {type(e).__name__}: {e}")
         fallback_reply = _rule_based_fallback(transcript, patient_context, is_nurse_call)
+        tts_data = generate_tts_audio_pcm_s16le(fallback_reply)
         return jsonify(
             {
                 "success": True,
                 "patientId": patient_id,
                 "transcript": transcript,
                 "reply": fallback_reply,
+                "audioBase64": tts_data["audioBase64"],
+                "audioFormat": tts_data["audioFormat"],
+                "sampleRate": tts_data["sampleRate"],
+                "channels": tts_data["channels"],
                 "intent": intent,
                 "mode": "FALLBACK_OPENAI_ERROR",
             }
@@ -229,39 +379,64 @@ def process_voice():
 
 
 def _rule_based_fallback(transcript: str, patient_context: dict, is_nurse_call: bool) -> str:
-    """Safe rule-based fallback when OpenAI is unavailable."""
+    """Safe, highly responsive rule-based engine when OpenAI API is not configured."""
     if is_nurse_call:
         return "Okay. I have notified the nursing station. A healthcare team member will be with you shortly."
 
     lower = transcript.lower()
-    vitals = patient_context.get("vitals", {})
+    vitals = patient_context.get("vitals", {}) or {}
 
-    if ("heart rate" in lower or "pulse" in lower or "bpm" in lower):
+    # Greeting / General status query
+    if any(w in lower for w in ["hello", "hi", "hey", "who are you", "what can you do"]):
+        return "Hello! I am SmartCare+, your bedside health assistant. I can check your vitals, medicine schedule, or call a nurse for you."
+
+    if any(w in lower for w in ["vital", "status", "health", "how am i", "check me", "summary"]):
+        parts = []
+        hr = vitals.get("heartRate")
+        spo2 = vitals.get("spo2")
+        temp = vitals.get("temperature")
+
+        if hr: parts.append(f"Heart rate is {int(round(float(hr)))} BPM")
+        if spo2: parts.append(f"Oxygen saturation is {int(round(float(spo2)))}%")
+        if temp: parts.append(f"Body temperature is {round(float(temp), 1)}°C")
+
+        if parts:
+            return "Your current vitals: " + ", ".join(parts) + "."
+        return "Your bedside sensors are active. Body temperature is currently monitored."
+
+    # Heart Rate / Pulse
+    if any(w in lower for w in ["heart rate", "pulse", "bpm", "heart"]):
         hr = vitals.get("heartRate")
         if hr:
-            return f"Your latest recorded heart rate is {hr} beats per minute."
-        return "I do not have your current heart rate reading available. Please check with your nurse."
+            return f"Your latest heart rate is {int(round(float(hr)))} beats per minute."
+        return "I do not have a live heart rate reading right now. Please ensure your finger is placed on the sensor."
 
-    if ("oxygen" in lower or "spo2" in lower or "spo" in lower or "saturation" in lower):
+    # Oxygen Saturation
+    if any(w in lower for w in ["oxygen", "spo2", "spo", "saturation"]):
         spo2 = vitals.get("spo2")
         if spo2:
-            return f"Your oxygen saturation level is {spo2} percent."
-        return "I do not have your current oxygen reading. Please check with your nurse."
+            return f"Your oxygen saturation level is {int(round(float(spo2)))} percent."
+        return "I do not have a live oxygen reading right now. Please place your finger on the pulse oximeter."
 
-    if ("temperature" in lower or "fever" in lower or "temp" in lower):
+    # Temperature
+    if any(w in lower for w in ["temperature", "fever", "temp", "feverish"]):
         temp = vitals.get("temperature")
         if temp:
-            return f"Your body temperature is {temp} degrees Celsius."
-        return "I do not have your current temperature reading. Please check with your nurse."
+            return f"Your body temperature is {round(float(temp), 1)} degrees Celsius."
+        return "I do not have a live temperature reading available right now."
 
+    # Medicines
     medicines = patient_context.get("medicines", [])
-    if ("medicine" in lower or "medication" in lower or "pill" in lower or "drug" in lower):
+    if any(w in lower for w in ["medicine", "medication", "pill", "drug", "dose"]):
         if medicines:
             first = medicines[0]
-            return f"Your medicine {first.get('name', 'scheduled')} {first.get('dosage', '')} is due {first.get('nextDoseTime', 'as scheduled')}."
-        return "I do not have your medicine schedule available at the moment."
+            name = first.get("name", "scheduled medication")
+            dosage = first.get("dosage", "")
+            time_str = first.get("nextDoseTime", "as scheduled")
+            return f"Your medicine {name} {dosage} is scheduled for {time_str}."
+        return "You have no pending medicines scheduled for today."
 
-    return "The AI service is temporarily unavailable. Please contact nursing staff for urgent assistance."
+    return "I am monitoring your bedside vitals. Please press the push-to-talk button if you need to call a nurse or check your health status."
 
 
 if __name__ == "__main__":

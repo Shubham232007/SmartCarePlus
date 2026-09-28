@@ -88,9 +88,9 @@ export interface VitalReading {
   id?: string;
   patientId: string;
   deviceId: string;
-  heartRate: number;
-  spo2: number;
-  temperature: number;
+  heartRate?: number | null;
+  spo2?: number | null;
+  temperature?: number | null;
   recordedAt: string;
   device?: {
     deviceId: string;

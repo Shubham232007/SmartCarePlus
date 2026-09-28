@@ -92,7 +92,7 @@ export const authorizeDoctorPatientAccess = async (req: AuthenticatedRequest, re
     }
 
     if (req.user.role === 'PATIENT') {
-      if (req.user.patientId !== targetPatientId) {
+      if (targetPatientId !== 'me' && req.user.patientId !== targetPatientId) {
         const patient = await prisma.patient.findUnique({ where: { id: req.user.patientId } });
         if (!patient || (patient.id !== targetPatientId && patient.patientId !== targetPatientId)) {
           res.status(403).json({ success: false, message: 'Access denied. Patients may only view their own health records.', errorCode: 'PATIENT_ACCESS_DENIED' });

@@ -64,7 +64,7 @@
 ### Bedside IoT Hardware Prototype
 - **Microcontroller**: ESP32 DevKit V1
 - **Pulse Oximeter & Heart Rate**: MAX30100 (I2C: SDA=21, SCL=22)
-- **Body Temperature**: MLX90614 Non-Contact IR Sensor (I2C: SDA=21, SCL=22)
+- **Body Temperature**: DS18B20 Digital Temperature Sensor (1-Wire: GPIO 4 with 4.7kΩ pull-up)
 - **Display**: 0.96 inch OLED SSD1306 (I2C 0x3C)
 - **Microphone**: INMP441 MEMS Microphone (I2S)
 - **Speaker & Amplifier**: MAX98357A 3W Class-D Amplifier (I2S)
@@ -140,7 +140,7 @@ smartcare-plus/
 │
 ├── esp32/
 │   └── firmware/
-│       └── smartcare_esp32.ino # ESP32 DevKit C++ Sketch (MAX30100, MLX90614, I2S)
+│       └── smartcare_esp32.ino # ESP32 DevKit C++ Sketch (MAX30100, DS18B20, I2S)
 │
 ├── docker-compose.yml       # PostgreSQL database container configuration
 ├── .env.example

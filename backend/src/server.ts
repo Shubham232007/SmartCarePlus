@@ -42,6 +42,15 @@ const limiter = rateLimit({
 });
 app.use('/api/', limiter);
 
+// Healthcheck Route
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'ONLINE',
+    service: 'SmartCare+ Backend Core API',
+    timestamp: new Date(),
+  });
+});
+
 // Mount Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/patients', patientRoutes);
@@ -54,15 +63,6 @@ app.use('/api/emergency', emergencyRoutes);
 app.use('/api', clinicalNoteRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/admin', adminRoutes);
-
-// Healthcheck Route
-app.get('/api/health', (req, res) => {
-  res.json({
-    status: 'ONLINE',
-    service: 'SmartCare+ Backend Core API',
-    timestamp: new Date(),
-  });
-});
 
 // 404 Route
 app.use('*', (req, res) => {
@@ -102,9 +102,10 @@ setInterval(async () => {
 const PORT = Number(ENV.PORT) || 5000;
 
 if (process.env.NODE_ENV !== 'test') {
-  server.listen(PORT, () => {
+  server.listen(PORT, '0.0.0.0', () => {
     console.log(`==================================================`);
-    console.log(`🏥 SMARTCARE+ Backend Server Running on Port ${PORT}`);
+    console.log(`[SERVER] SMARTCARE+ AI backend running on port 5000`);
+    console.log(`🏥 SMARTCARE+ Backend Server Running on http://0.0.0.0:${PORT}`);
     console.log(`📡 Real-Time Socket.IO Active`);
     console.log(`==================================================`);
   });

@@ -2,21 +2,12 @@ import { Response, NextFunction } from 'express';
 import { prisma } from '../config/prisma';
 import { DeviceRequest } from '../middleware/deviceAuthMiddleware';
 import { evaluateVitalAlerts } from '../services/alertEvaluator';
-import { broadcastVitalUpdate, broadcastDeviceStatus, broadcastEmergencyEvent, broadcastNewAlert } from '../sockets/socketManager';
-import { processVoiceWithAIServer } from '../services/aiProxyService';
+import { broadcastVitalUpdate, broadcastDeviceStatus, broadcastEmergencyEvent, broadcastNewAlert, broadcastVoiceInteraction } from '../sockets/socketManager';
+import { processVoiceWithAIServer, processVoiceWithAIServerFull } from '../services/aiProxyService';
 
 export const submitVitalReadings = async (req: DeviceRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
     const { deviceId, patientId, heartRate, spo2, temperature, timestamp } = req.body;
-
-    if (heartRate == null || spo2 == null || temperature == null) {
-      res.status(400).json({
-        success: false,
-        message: 'Invalid sensor readings. heartRate, spo2, and temperature are required.',
-        errorCode: 'INVALID_SENSOR_DATA',
-      });
-      return;
-    }
 
     let resolvedPatientId = req.device?.patientId;
     if (patientId && typeof patientId === 'string') {
@@ -39,16 +30,39 @@ export const submitVitalReadings = async (req: DeviceRequest, res: Response, nex
 
     const recordedAt = timestamp ? new Date(timestamp) : new Date();
 
-    const reading = await prisma.vitalReading.create({
-      data: {
-        patientId: resolvedPatientId,
-        deviceId: req.device!.id,
-        heartRate: Number(heartRate),
-        spo2: Number(spo2),
-        temperature: Number(temperature),
-        recordedAt,
-      },
-    });
+    // Data validation according to requirements (realistic range or null)
+    let finalHR: number | null = null;
+    if (heartRate != null && !isNaN(Number(heartRate))) {
+      const hr = Number(heartRate);
+      if (hr >= 30 && hr <= 220) finalHR = hr;
+    }
+
+    let finalSpO2: number | null = null;
+    if (spo2 != null && !isNaN(Number(spo2))) {
+      const sp = Number(spo2);
+      if (sp >= 50 && sp <= 100) finalSpO2 = sp;
+    }
+
+    let finalTemp: number | null = null;
+    if (temperature != null && !isNaN(Number(temperature))) {
+      const temp = Number(temperature);
+      if (temp >= 20.0 && temp <= 45.0) finalTemp = temp;
+    }
+
+    // Only create a database record if at least one metric is valid (non-null)
+    let reading = null;
+    if (finalHR !== null || finalSpO2 !== null || finalTemp !== null) {
+      reading = await prisma.vitalReading.create({
+        data: {
+          patientId: resolvedPatientId,
+          deviceId: req.device!.id,
+          heartRate: finalHR,
+          spo2: finalSpO2,
+          temperature: finalTemp,
+          recordedAt,
+        },
+      });
+    }
 
     const updatedDevice = await prisma.device.update({
       where: { id: req.device!.id },
@@ -64,22 +78,24 @@ export const submitVitalReadings = async (req: DeviceRequest, res: Response, nex
       lastSeen: updatedDevice.lastSeen!,
     });
 
-    broadcastVitalUpdate({
-      patientId: resolvedPatientId,
-      deviceId: updatedDevice.deviceId,
-      heartRate: reading.heartRate,
-      spo2: reading.spo2,
-      temperature: reading.temperature,
-      recordedAt: reading.recordedAt,
-    });
+    if (reading) {
+      broadcastVitalUpdate({
+        patientId: resolvedPatientId,
+        deviceId: updatedDevice.deviceId,
+        heartRate: reading.heartRate,
+        spo2: reading.spo2,
+        temperature: reading.temperature,
+        recordedAt: reading.recordedAt,
+      });
 
-    await evaluateVitalAlerts(resolvedPatientId, req.device!.id, reading.heartRate, reading.spo2, reading.temperature);
+      await evaluateVitalAlerts(resolvedPatientId, req.device!.id, reading.heartRate, reading.spo2, reading.temperature);
+    }
 
     res.status(201).json({
       success: true,
-      message: 'Reading stored',
-      readingId: reading.id,
-      recordedAt: reading.recordedAt,
+      message: reading ? 'Reading stored' : 'Device status online updated',
+      readingId: reading?.id || null,
+      recordedAt,
     });
   } catch (error) {
     next(error);
@@ -219,7 +235,7 @@ export const deviceVoiceQuery = async (req: DeviceRequest, res: Response, next: 
       return;
     }
 
-    const aiReply = await processVoiceWithAIServer(patientId, transcript.trim());
+    const aiResult = await processVoiceWithAIServerFull(patientId, transcript.trim());
 
     // Store voice interaction in DB
     const interaction = await prisma.voiceInteraction.create({
@@ -227,15 +243,40 @@ export const deviceVoiceQuery = async (req: DeviceRequest, res: Response, next: 
         patientId,
         deviceId: req.device.id,
         transcript: transcript.trim(),
-        aiResponse: aiReply,
+        aiResponse: aiResult.reply,
         timestamp: new Date(),
         status: 'COMPLETED',
       },
     });
 
-    console.log(`🎙️ [IoT-Voice] Device ${req.device.deviceId} voice query: "${transcript.trim().substring(0, 60)}..."`);
+    broadcastVoiceInteraction({
+      patientId,
+      deviceId: req.device.deviceId,
+      transcript: transcript.trim(),
+      reply: aiResult.reply,
+      audioBase64: aiResult.audioBase64,
+      audioFormat: aiResult.audioFormat || 'pcm_s16le',
+      sampleRate: aiResult.sampleRate || 8000,
+      channels: aiResult.channels || 1,
+      timestamp: interaction.timestamp,
+    });
 
-    res.json({ success: true, reply: aiReply, interactionId: interaction.id });
+    console.log(`🎙️ [IoT-Voice] Device ${req.device.deviceId} voice query: "${transcript.trim().substring(0, 60)}..."`);
+    console.log(`\n[TTS DEBUG] Reply text: ${aiResult.reply}`);
+    console.log(`[TTS DEBUG] TTS generation attempted: YES`);
+    console.log(`[TTS DEBUG] Audio bytes: ${aiResult.audioBase64 ? Math.floor((aiResult.audioBase64.length * 3) / 4) : 0}`);
+    console.log(`[TTS DEBUG] Base64 length: ${aiResult.audioBase64 ? aiResult.audioBase64.length : 0}`);
+    console.log(`[TTS DEBUG] Response JSON keys: success, reply, audioBase64, audioFormat, sampleRate, channels, interactionId\n`);
+
+    res.json({
+      success: true,
+      reply: aiResult.reply,
+      audioBase64: aiResult.audioBase64 || '',
+      audioFormat: aiResult.audioFormat || 'pcm_s16le',
+      sampleRate: aiResult.sampleRate || 8000,
+      channels: aiResult.channels || 1,
+      interactionId: interaction.id,
+    });
   } catch (error) {
     next(error);
   }

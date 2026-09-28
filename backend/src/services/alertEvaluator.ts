@@ -4,9 +4,9 @@ import { broadcastNewAlert } from '../sockets/socketManager';
 export const evaluateVitalAlerts = async (
   patientId: string,
   deviceId: string,
-  heartRate: number,
-  spo2: number,
-  temperature: number
+  heartRate?: number | null,
+  spo2?: number | null,
+  temperature?: number | null
 ) => {
   try {
     let threshold = await prisma.thresholdConfig.findUnique({ where: { id: 'default' } });
@@ -33,54 +33,60 @@ export const evaluateVitalAlerts = async (
     }[] = [];
 
     // Evaluate Heart Rate
-    if (heartRate > threshold.maxHeartRate) {
-      alertsToTrigger.push({
-        type: 'HIGH_HEART_RATE',
-        severity: 'CRITICAL',
-        title: 'High Heart Rate Alert',
-        message: `Heart rate recorded at ${heartRate} BPM (configured limit: >${threshold.maxHeartRate} BPM).`,
-      });
-    } else if (heartRate < threshold.minHeartRate) {
-      alertsToTrigger.push({
-        type: 'LOW_HEART_RATE',
-        severity: 'WARNING',
-        title: 'Low Heart Rate Alert',
-        message: `Heart rate recorded at ${heartRate} BPM (configured limit: <${threshold.minHeartRate} BPM).`,
-      });
+    if (heartRate != null && heartRate > 0) {
+      if (heartRate > threshold.maxHeartRate) {
+        alertsToTrigger.push({
+          type: 'HIGH_HEART_RATE',
+          severity: 'CRITICAL',
+          title: 'High Heart Rate Alert',
+          message: `Heart rate recorded at ${heartRate} BPM (configured limit: >${threshold.maxHeartRate} BPM).`,
+        });
+      } else if (heartRate < threshold.minHeartRate) {
+        alertsToTrigger.push({
+          type: 'LOW_HEART_RATE',
+          severity: 'WARNING',
+          title: 'Low Heart Rate Alert',
+          message: `Heart rate recorded at ${heartRate} BPM (configured limit: <${threshold.minHeartRate} BPM).`,
+        });
+      }
     }
 
     // Evaluate SpO2
-    if (spo2 < threshold.minSpo2Critical) {
-      alertsToTrigger.push({
-        type: 'LOW_SPO2',
-        severity: 'CRITICAL',
-        title: 'Critical SpO2 Drop',
-        message: `Blood oxygen level dropped critically to ${spo2}% (critical limit: <${threshold.minSpo2Critical}%).`,
-      });
-    } else if (spo2 < threshold.minSpo2Warning) {
-      alertsToTrigger.push({
-        type: 'LOW_SPO2',
-        severity: 'WARNING',
-        title: 'SpO2 Warning Level',
-        message: `Blood oxygen level dropped to ${spo2}% (warning limit: <${threshold.minSpo2Warning}%).`,
-      });
+    if (spo2 != null && spo2 > 0) {
+      if (spo2 < threshold.minSpo2Critical) {
+        alertsToTrigger.push({
+          type: 'LOW_SPO2',
+          severity: 'CRITICAL',
+          title: 'Critical SpO2 Drop',
+          message: `Blood oxygen level dropped critically to ${spo2}% (critical limit: <${threshold.minSpo2Critical}%).`,
+        });
+      } else if (spo2 < threshold.minSpo2Warning) {
+        alertsToTrigger.push({
+          type: 'LOW_SPO2',
+          severity: 'WARNING',
+          title: 'SpO2 Warning Level',
+          message: `Blood oxygen level dropped to ${spo2}% (warning limit: <${threshold.minSpo2Warning}%).`,
+        });
+      }
     }
 
     // Evaluate Temperature
-    if (temperature > threshold.maxTemp) {
-      alertsToTrigger.push({
-        type: 'HIGH_TEMPERATURE',
-        severity: 'WARNING',
-        title: 'Elevated Body Temperature',
-        message: `Body temperature recorded at ${temperature}°C (limit: >${threshold.maxTemp}°C).`,
-      });
-    } else if (temperature < threshold.minTemp) {
-      alertsToTrigger.push({
-        type: 'LOW_TEMPERATURE',
-        severity: 'WARNING',
-        title: 'Low Body Temperature',
-        message: `Body temperature recorded at ${temperature}°C (limit: <${threshold.minTemp}°C).`,
-      });
+    if (temperature != null && temperature > 0) {
+      if (temperature > threshold.maxTemp) {
+        alertsToTrigger.push({
+          type: 'HIGH_TEMPERATURE',
+          severity: 'WARNING',
+          title: 'Elevated Body Temperature',
+          message: `Body temperature recorded at ${temperature}°C (limit: >${threshold.maxTemp}°C).`,
+        });
+      } else if (temperature < threshold.minTemp) {
+        alertsToTrigger.push({
+          type: 'LOW_TEMPERATURE',
+          severity: 'WARNING',
+          title: 'Low Body Temperature',
+          message: `Body temperature recorded at ${temperature}°C (limit: <${threshold.minTemp}°C).`,
+        });
+      }
     }
 
     // Process alerts with cooldown/debouncing

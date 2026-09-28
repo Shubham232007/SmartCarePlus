@@ -112,28 +112,28 @@ export const PatientDashboard: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <VitalCard
           type="heartRate"
-          value={latestVital?.heartRate || 75}
+          value={latestVital?.heartRate}
           recordedAt={latestVital?.recordedAt}
           status={
-            (latestVital?.heartRate || 75) > 120 ? 'CRITICAL' : (latestVital?.heartRate || 75) < 50 ? 'WARNING' : 'NORMAL'
+            latestVital?.heartRate ? (latestVital.heartRate > 120 ? 'CRITICAL' : latestVital.heartRate < 50 ? 'WARNING' : 'NORMAL') : 'NORMAL'
           }
         />
 
         <VitalCard
           type="spo2"
-          value={latestVital?.spo2 || 98}
+          value={latestVital?.spo2}
           recordedAt={latestVital?.recordedAt}
           status={
-            (latestVital?.spo2 || 98) < 90 ? 'CRITICAL' : (latestVital?.spo2 || 98) < 94 ? 'WARNING' : 'NORMAL'
+            latestVital?.spo2 ? (latestVital.spo2 < 90 ? 'CRITICAL' : latestVital.spo2 < 94 ? 'WARNING' : 'NORMAL') : 'NORMAL'
           }
         />
 
         <VitalCard
           type="temperature"
-          value={latestVital?.temperature || 36.7}
+          value={latestVital?.temperature}
           recordedAt={latestVital?.recordedAt}
           status={
-            (latestVital?.temperature || 36.7) > 38.0 || (latestVital?.temperature || 36.7) < 36.0 ? 'WARNING' : 'NORMAL'
+            latestVital?.temperature ? (latestVital.temperature > 38.0 || latestVital.temperature < 36.0 ? 'WARNING' : 'NORMAL') : 'NORMAL'
           }
         />
       </div>

@@ -4,7 +4,7 @@ import { StatusBadge } from '../common/StatusBadge';
 
 interface VitalCardProps {
   type: 'heartRate' | 'spo2' | 'temperature';
-  value: number;
+  value?: number | null;
   recordedAt?: string;
   status?: 'NORMAL' | 'WARNING' | 'CRITICAL' | string;
 }

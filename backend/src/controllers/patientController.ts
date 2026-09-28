@@ -42,30 +42,31 @@ export const getPatientProfile = async (req: AuthenticatedRequest, res: Response
 
 export const getLatestVitals = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const rawId = req.params.id || req.user?.patientId;
-    const patientId = typeof rawId === 'string' ? rawId : '';
+    const paramId = String(req.params.id || '');
+    const patientId = (paramId && paramId !== 'me' && paramId !== 'undefined') ? paramId : (req.user?.patientId || '');
 
-    let resolvedId = patientId;
+    let resolvedId: string = patientId;
     if (patientId.startsWith('PAT-')) {
       const p = await prisma.patient.findUnique({ where: { patientId } });
       if (p) resolvedId = p.id;
     }
 
     const latest = await prisma.vitalReading.findFirst({
-      where: { patientId: resolvedId },
+      where: {
+        patientId: resolvedId,
+        OR: [
+          { heartRate: { not: null } },
+          { spo2: { not: null } },
+          { temperature: { not: null } },
+        ],
+      },
       orderBy: { recordedAt: 'desc' },
       include: { device: { select: { deviceId: true, status: true, lastSeen: true } } },
     });
 
     res.json({
       success: true,
-      latest: latest || {
-        heartRate: 75,
-        spo2: 98,
-        temperature: 36.6,
-        recordedAt: new Date(),
-        device: { status: 'OFFLINE' },
-      },
+      latest: latest || null,
     });
   } catch (error) {
     next(error);
@@ -74,14 +75,14 @@ export const getLatestVitals = async (req: AuthenticatedRequest, res: Response, 
 
 export const getVitalsHistory = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
   try {
-    const rawId = req.params.id || req.user?.patientId;
-    const patientId = typeof rawId === 'string' ? rawId : '';
+    const paramId = String(req.params.id || '');
+    const patientId = (paramId && paramId !== 'me' && paramId !== 'undefined') ? paramId : (req.user?.patientId || '');
 
     const range = (req.query.range as string) || '24h';
     const from = req.query.from as string;
     const to = req.query.to as string;
 
-    let resolvedId = patientId;
+    let resolvedId: string = patientId;
     if (patientId.startsWith('PAT-')) {
       const p = await prisma.patient.findUnique({ where: { patientId } });
       if (p) resolvedId = p.id;

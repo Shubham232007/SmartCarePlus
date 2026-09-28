@@ -79,7 +79,7 @@ export const DoctorPatientDetail: React.FC = () => {
     return <div className="p-8 text-center text-slate-400">Loading patient electronic health record...</div>;
   }
 
-  const latestVital = patient.vitalReadings?.[0] || { heartRate: 75, spo2: 98, temperature: 36.6 };
+  const latestVital = patient.vitalReadings?.[0] || null;
   const primaryDevice = patient.devices?.[0];
 
   return (
@@ -129,23 +129,23 @@ export const DoctorPatientDetail: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
         <VitalCard
           type="heartRate"
-          value={latestVital.heartRate}
-          recordedAt={latestVital.recordedAt}
-          status={latestVital.heartRate > 120 ? 'CRITICAL' : latestVital.heartRate < 50 ? 'WARNING' : 'NORMAL'}
+          value={latestVital?.heartRate}
+          recordedAt={latestVital?.recordedAt}
+          status={latestVital?.heartRate ? (latestVital.heartRate > 120 ? 'CRITICAL' : latestVital.heartRate < 50 ? 'WARNING' : 'NORMAL') : 'NORMAL'}
         />
 
         <VitalCard
           type="spo2"
-          value={latestVital.spo2}
-          recordedAt={latestVital.recordedAt}
-          status={latestVital.spo2 < 90 ? 'CRITICAL' : latestVital.spo2 < 94 ? 'WARNING' : 'NORMAL'}
+          value={latestVital?.spo2}
+          recordedAt={latestVital?.recordedAt}
+          status={latestVital?.spo2 ? (latestVital.spo2 < 90 ? 'CRITICAL' : latestVital.spo2 < 94 ? 'WARNING' : 'NORMAL') : 'NORMAL'}
         />
 
         <VitalCard
           type="temperature"
-          value={latestVital.temperature}
-          recordedAt={latestVital.recordedAt}
-          status={latestVital.temperature > 38.0 || latestVital.temperature < 36.0 ? 'WARNING' : 'NORMAL'}
+          value={latestVital?.temperature}
+          recordedAt={latestVital?.recordedAt}
+          status={latestVital?.temperature ? (latestVital.temperature > 38.0 || latestVital.temperature < 36.0 ? 'WARNING' : 'NORMAL') : 'NORMAL'}
         />
       </div>
 

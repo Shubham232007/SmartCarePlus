@@ -82,9 +82,9 @@ export const getIO = (): Server => {
 export const broadcastVitalUpdate = (data: {
   patientId: string;
   deviceId: string;
-  heartRate: number;
-  spo2: number;
-  temperature: number;
+  heartRate: number | null;
+  spo2: number | null;
+  temperature: number | null;
   recordedAt: Date;
 }) => {
   if (!io) return;
@@ -121,4 +121,5 @@ export const broadcastEmergencyEvent = (emergencyData: any) => {
 export const broadcastVoiceInteraction = (voiceData: any) => {
   if (!io) return;
   io.to(`patient:${voiceData.patientId}`).emit('voice:new', voiceData);
+  io.emit('voice:new', voiceData);
 };

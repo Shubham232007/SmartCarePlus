@@ -212,7 +212,7 @@ export const ProjectOverviewModal: React.FC<ProjectOverviewModalProps> = ({
                     <span className="font-semibold text-teal-300">MAX30100 Oximeter:</span> Measures Heart Rate (BPM) & SpO2 blood oxygen levels via I2C (SDA 21, SCL 22).
                   </div>
                   <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
-                    <span className="font-semibold text-teal-300">MLX90614 IR Temp:</span> Non-contact infrared temperature sensing for accurate skin/body temperature.
+                    <span className="font-semibold text-teal-300">DS18B20 Temp Sensor:</span> Digital OneWire temperature sensor for body temperature monitoring (GPIO 4).
                   </div>
                   <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800">
                     <span className="font-semibold text-teal-300">INMP441 Microphone:</span> I2S MEMS omnidirectional microphone for capturing patient voice queries.
