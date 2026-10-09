@@ -164,42 +164,60 @@ def trim_pcm_silence(pcm_data: bytes, threshold: int = 150) -> bytes:
 
 def generate_tts_audio_pcm_s16le(text: str) -> dict:
     """
-    Generate raw signed 16-bit little-endian PCM audio payload (pcm_s16le, 8000Hz, Mono).
-    Strips all WAV headers and returns raw PCM bytes encoded in Base64.
+    Generate ultra-realistic, natural human-like voice PCM payload (pcm_s16le, 16000Hz, Mono).
+    Uses Microsoft Neural TTS (edge-tts) for studio-grade human voice, with fallback to OpenAI/pyttsx3.
     """
     if not text:
-        print("\n[TTS DEBUG] Reply text: empty")
-        print("[TTS DEBUG] TTS generation attempted: NO")
-        print("[TTS DEBUG] Audio bytes: 0")
-        print("[TTS DEBUG] Base64 length: 0")
-        print("[TTS DEBUG] Response JSON keys: audioBase64, audioFormat, sampleRate, channels")
-        return {"audioBase64": "", "audioFormat": "pcm_s16le", "sampleRate": 8000, "channels": 1, "error": "Empty text"}
+        return {"audioBase64": "", "audioFormat": "pcm_s16le", "sampleRate": 16000, "channels": 1, "error": "Empty text"}
 
     raw_pcm = None
     error_msg = None
 
-    # 1. Try OpenAI API if client is available
-    client = get_openai_client()
-    if client is not None:
-        try:
-            response = client.audio.speech.create(
-                model="tts-1",
-                voice="alloy",
-                input=text,
-                response_format="pcm" # OpenAI returns 24kHz 16-bit mono PCM
-            )
-            openai_pcm = response.content
-            if openai_pcm and len(openai_pcm) > 0:
-                import audioop
-                raw_pcm, _ = audioop.ratecv(openai_pcm, 2, 1, 24000, 8000, None)
-        except Exception as e:
-            error_msg = f"OpenAI TTS error: {e}"
-            print(f"[TTS DEBUG] OpenAI TTS Exception: {e}")
+    # 1. Primary: Microsoft Edge Neural TTS (Ultra-realistic, warm, human-like voice)
+    try:
+        import asyncio, edge_tts, miniaudio
+        async def _synth_edge():
+            # en-US-JennyNeural is warm, professional, hospital-assistant style
+            comm = edge_tts.Communicate(text, voice="en-US-JennyNeural", rate="+0%", volume="+0%")
+            mp3_buf = bytearray()
+            async for chunk in comm.stream():
+                if chunk["type"] == "audio":
+                    mp3_buf.extend(chunk["data"])
+            return bytes(mp3_buf)
 
-    # 2. Offline pyttsx3 fallback (Windows SAPI5 16-bit PCM)
+        mp3_bytes = asyncio.run(_synth_edge())
+        if mp3_bytes and len(mp3_bytes) > 0:
+            decoded = miniaudio.decode(mp3_bytes, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=1, sample_rate=16000)
+            raw_pcm = bytes(decoded.samples)
+            print(f"[TTS NEURAL] Generated {len(raw_pcm)} bytes of 16kHz human-like neural audio via edge-tts")
+    except Exception as e:
+        print(f"[TTS DEBUG] edge-tts error: {e}")
+        error_msg = f"edge-tts error: {e}"
+
+    # 2. Secondary: OpenAI TTS API
+    if raw_pcm is None:
+        client = get_openai_client()
+        if client is not None:
+            try:
+                response = client.audio.speech.create(
+                    model="tts-1",
+                    voice="alloy",
+                    input=text,
+                    response_format="pcm" # 24kHz 16-bit mono
+                )
+                openai_pcm = response.content
+                if openai_pcm and len(openai_pcm) > 0:
+                    import miniaudio
+                    # Resample 24kHz to 16kHz
+                    raw_pcm = b"".join(openai_pcm[i:i+2] for i in range(0, len(openai_pcm) - 1, 3))
+            except Exception as e:
+                error_msg = f"OpenAI TTS error: {e}"
+                print(f"[TTS DEBUG] OpenAI TTS Exception: {e}")
+
+    # 3. Tertiary: Offline pyttsx3 fallback
     if raw_pcm is None:
         try:
-            import pyttsx3, tempfile, os, wave, audioop
+            import pyttsx3, tempfile, os, wave, miniaudio
             engine = pyttsx3.init()
             engine.setProperty('rate', 145)
 
@@ -210,58 +228,40 @@ def generate_tts_audio_pcm_s16le(text: str) -> dict:
             engine.runAndWait()
 
             if os.path.exists(wav_path):
-                with wave.open(wav_path, 'rb') as w:
-                    nchannels, sampwidth, framerate, nframes = w.getparams()[:4]
-                    raw_pcm = w.readframes(nframes) # Read raw PCM frames ONLY (excluding 44-byte WAV header)
+                decoded = miniaudio.decode_file(wav_path, output_format=miniaudio.SampleFormat.SIGNED16, nchannels=1, sample_rate=16000)
                 os.remove(wav_path)
-
-                if nchannels > 1:
-                    raw_pcm = audioop.tomono(raw_pcm, sampwidth, 0.5, 0.5)
-                if sampwidth != 2:
-                    raw_pcm = audioop.lin2lin(raw_pcm, sampwidth, 2)
-                if framerate != 8000:
-                    raw_pcm, _ = audioop.ratecv(raw_pcm, 2, 1, framerate, 8000, None)
+                raw_pcm = bytes(decoded.samples)
         except Exception as e:
             error_msg = f"pyttsx3 TTS error: {e}"
             print(f"[TTS DEBUG] pyttsx3 TTS Exception: {e}")
 
     if raw_pcm and len(raw_pcm) > 0:
-        # Trim leading and trailing silence
         raw_pcm = trim_pcm_silence(raw_pcm)
 
-        # Cap raw PCM bytes to max 64KB (~32,000 samples = 4 seconds of 8kHz 16-bit mono audio = ~85KB Base64)
-        if len(raw_pcm) > 64000:
-            cutoff = 64000 - (64000 % 2)
+        # Cap raw PCM bytes to max 128KB (~64,000 samples = ~4 seconds of 16kHz 16-bit mono audio)
+        if len(raw_pcm) > 128000:
+            cutoff = 128000 - (128000 % 2)
             raw_pcm = raw_pcm[:cutoff]
 
         import base64
         b64_str = base64.b64encode(raw_pcm).decode('utf-8')
 
         print(f"\n[TTS DEBUG] Reply text: {text[:60]}")
-        print(f"[TTS DEBUG] TTS generation attempted: YES")
-        print(f"[TTS DEBUG] Audio bytes: {len(raw_pcm)}")
-        print(f"[TTS DEBUG] Base64 length: {len(b64_str)}")
-        print(f"[TTS DEBUG] Response JSON keys: audioBase64, audioFormat, sampleRate, channels")
+        print(f"[TTS DEBUG] Human Voice Generated: YES (16kHz S16LE Mono)")
+        print(f"[TTS DEBUG] Audio bytes: {len(raw_pcm)} | Base64 length: {len(b64_str)}")
 
         return {
             "audioBase64": b64_str,
             "audioFormat": "pcm_s16le",
-            "sampleRate": 8000,
+            "sampleRate": 16000,
             "channels": 1,
             "error": None,
         }
 
-    print(f"\n[TTS DEBUG] Reply text: {text[:60]}")
-    print(f"[TTS DEBUG] TTS generation attempted: YES")
-    print(f"[TTS DEBUG] Audio bytes: 0")
-    print(f"[TTS DEBUG] Base64 length: 0")
-    print(f"[TTS DEBUG] Response JSON keys: audioBase64, audioFormat, sampleRate, channels, error")
-    print(f"[TTS DEBUG] Error: {error_msg}")
-
     return {
         "audioBase64": "",
         "audioFormat": "pcm_s16le",
-        "sampleRate": 8000,
+        "sampleRate": 16000,
         "channels": 1,
         "error": error_msg or "TTS generation failed",
     }

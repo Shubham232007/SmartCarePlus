@@ -256,7 +256,7 @@ export const deviceVoiceQuery = async (req: DeviceRequest, res: Response, next: 
       reply: aiResult.reply,
       audioBase64: aiResult.audioBase64,
       audioFormat: aiResult.audioFormat || 'pcm_s16le',
-      sampleRate: aiResult.sampleRate || 8000,
+      sampleRate: aiResult.sampleRate || 16000,
       channels: aiResult.channels || 1,
       timestamp: interaction.timestamp,
     });
@@ -273,7 +273,7 @@ export const deviceVoiceQuery = async (req: DeviceRequest, res: Response, next: 
       reply: aiResult.reply,
       audioBase64: aiResult.audioBase64 || '',
       audioFormat: aiResult.audioFormat || 'pcm_s16le',
-      sampleRate: aiResult.sampleRate || 8000,
+      sampleRate: aiResult.sampleRate || 16000,
       channels: aiResult.channels || 1,
       interactionId: interaction.id,
     });

@@ -96,7 +96,7 @@ export const processVoiceWithAIServerFull = async (
         intent: response.data.intent || 'GENERAL',
         audioBase64: response.data.audioBase64,
         audioFormat: response.data.audioFormat || 'pcm_s16le',
-        sampleRate: response.data.sampleRate || 8000,
+        sampleRate: response.data.sampleRate || 16000,
         channels: response.data.channels || 1,
       };
     }
