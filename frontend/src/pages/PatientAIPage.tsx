@@ -24,6 +24,24 @@ export const PatientAIPage: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
   const [activeSpeechId, setActiveSpeechId] = useState<string | null>(null);
   const [nurseAlertBadge, setNurseAlertBadge] = useState<string | null>(null);
+  const [isTestingSpeaker, setIsTestingSpeaker] = useState<boolean>(false);
+  const [speakerTestFeedback, setSpeakerTestFeedback] = useState<string | null>(null);
+
+  const handleTestSpeaker = async () => {
+    setIsTestingSpeaker(true);
+    setSpeakerTestFeedback(null);
+    try {
+      await api.post('/voice/test-speaker');
+      setSpeakerTestFeedback('Playing on Mini boost 4!');
+      setTimeout(() => setSpeakerTestFeedback(null), 4000);
+    } catch (err) {
+      await speakAIResponse('SmartCare+ voice assistance is connected to your Bluetooth speaker Mini boost 4.');
+      setSpeakerTestFeedback('Audio test completed.');
+      setTimeout(() => setSpeakerTestFeedback(null), 4000);
+    } finally {
+      setIsTestingSpeaker(false);
+    }
+  };
 
   const fetchInteractions = async () => {
     try {
@@ -205,6 +223,26 @@ export const PatientAIPage: React.FC = () => {
                 </>
               )}
             </div>
+
+            {/* Bluetooth Speaker Status & Test Banner */}
+            <div className="flex items-center justify-center gap-2 pt-1">
+              <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full text-xs font-semibold bg-indigo-500/20 border border-indigo-400/30 text-indigo-200">
+                <span className="w-2 h-2 rounded-full bg-indigo-400 animate-pulse" />
+                <span>Bluetooth Speaker: <strong className="text-white font-bold">Mini boost 4</strong></span>
+              </div>
+              <button
+                type="button"
+                onClick={handleTestSpeaker}
+                disabled={isTestingSpeaker}
+                className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-white/10 hover:bg-white/20 border border-white/20 text-white transition active:scale-95 disabled:opacity-50"
+              >
+                <Volume2 className="w-3.5 h-3.5 mr-1 text-teal-400" />
+                {isTestingSpeaker ? 'Testing...' : 'Test Speaker'}
+              </button>
+            </div>
+            {speakerTestFeedback && (
+              <p className="text-xs text-emerald-300 font-medium animate-fade-in">{speakerTestFeedback}</p>
+            )}
 
             {/* Interim Transcript Live Display */}
             {interimTranscript && (

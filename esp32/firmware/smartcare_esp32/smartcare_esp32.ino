@@ -43,12 +43,18 @@
 //  CONFIGURATION - Network & Device Identification
 // ==============================================================================
 
-const char* WIFI_SSID        = "realme C65 5G";
-const char* WIFI_PASSWORD    = "sujal02@";
-const char* BACKEND_BASE_URL = "http://10.152.6.26:5000"; // Active PC IP on Wi-Fi/Hotspot
+const char* WIFI_SSID        = "vivo Y58 5G";
+const char* WIFI_PASSWORD    = "ssk23.07";
+const char* BACKEND_BASE_URL = "http://10.23.99.72:5000"; // Active PC IP on Wi-Fi/Hotspot
 const char* DEVICE_ID        = "SC-ESP32-001";
 const char* PATIENT_ID       = "PAT-1001";
 const char* DEVICE_KEY       = "device_secret_PAT-1001";
+
+// ==============================================================================
+//  VOICE OUTPUT & BLUETOOTH SPEAKER ("Mini boost 4") CONFIGURATION
+// ==============================================================================
+// Target Bluetooth Speaker Name for bedside voice assistant audio
+const char* BT_SPEAKER_NAME  = "Mini boost 4";
 
 // ==============================================================================
 //  EXACT GPIO PIN MAP
@@ -205,7 +211,7 @@ void updateOLED_Response(const char* reply);
 void sendTelemetry();
 void sendHeartbeat();
 void handleVoiceButton();
-void processVoiceRequest();
+void processVoiceRequest(const String& customTranscript = "");
 void streamVoiceResponseAndPlay(const String& transcript);
 void playAudioCue();
 void playBase64Pcm(const char* base64Str);
@@ -224,6 +230,7 @@ int   httpPost(const char* url, const String& body, String& resp, int timeoutMs 
 void setup() {
   Serial.begin(115200);
   Serial.println("\n[BOOT] SmartCare+ ESP32 IoT Node Starting...");
+  Serial.printf("[AUDIO] Voice Assistant Output configured for Bluetooth Speaker: '%s'\n", BT_SPEAKER_NAME);
 
   // Configure single Voice Push Button on GPIO 18
   pinMode(VOICE_BUTTON_PIN, INPUT_PULLUP);
@@ -293,7 +300,19 @@ void loop() {
       testSpeakerSpeech();
     } else if (voiceState == VS_IDLE) {
       Serial.printf("[SERIAL] Triggering AI Voice Query (Command: '%s')...\n", cmd.c_str());
-      processVoiceRequest();
+      String prompt = cmd;
+      String lower = cmd;
+      lower.toLowerCase();
+      if (lower == "hr" || lower == "heart" || lower == "heartrate") {
+        prompt = "What is my heart rate?";
+      } else if (lower == "temp" || lower == "temperature" || lower == "fever") {
+        prompt = "What is my body temperature?";
+      } else if (lower == "med" || lower == "medicine" || lower == "medicines") {
+        prompt = "When is my next medicine?";
+      } else if (lower == "spo2" || lower == "oxygen") {
+        prompt = "What is my oxygen level?";
+      }
+      processVoiceRequest(prompt);
     }
   }
 
@@ -1126,28 +1145,42 @@ void sendHeartbeat() {
 //  SINGLE VOICE BUTTON & PUSH-TO-TALK CONTROLLER
 // ==============================================================================
 
+uint32_t voiceBtnDownMs = 0;
+
 void handleVoiceButton() {
   bool currentButtonState = digitalRead(VOICE_BUTTON_PIN);
+  uint32_t now = millis();
 
+  // Button pressed DOWN
   if (lastButtonState == HIGH && currentButtonState == LOW) {
     if (voiceState == VS_IDLE) {
-      Serial.println("[VOICE] Button pressed - Listening...");
+      voiceBtnDownMs = now;
       voiceState = VS_LISTENING;
-      updateOLED_State("SMARTCARE+", "LISTENING...", "Speak now");
       audioCaptured = 0;
+      updateOLED_State("SMARTCARE+", "HOLD BUTTON", "1. Heart Rate (<1s)");
+      Serial.println("[VOICE] Button pressed - Quick press: Heart Rate | Hold 1.5s: Temperature | Hold 3s: Medicine");
 
-      // Re-initialize INMP441 Microphone I2S0 for audio capture
-      if (!micOK) {
-        initMicrophone();
-      }
-
-      if (audioBuffer) {
-        memset(audioBuffer, 0, MAX_AUDIO_SAMPLES * sizeof(int16_t));
-      }
+      if (!micOK) initMicrophone();
+      if (audioBuffer) memset(audioBuffer, 0, MAX_AUDIO_SAMPLES * sizeof(int16_t));
     }
   }
 
+  // Button being held down
   if (voiceState == VS_LISTENING && currentButtonState == LOW) {
+    uint32_t heldMs = now - voiceBtnDownMs;
+    static uint32_t lastOledModeMs = 0;
+
+    if (now - lastOledModeMs > 250) {
+      lastOledModeMs = now;
+      if (heldMs < 1200) {
+        updateOLED_State("SMARTCARE+", "RELEASE FOR:", "1. Heart Rate");
+      } else if (heldMs < 2500) {
+        updateOLED_State("SMARTCARE+", "RELEASE FOR:", "2. Temperature");
+      } else {
+        updateOLED_State("SMARTCARE+", "RELEASE FOR:", "3. Next Medicine");
+      }
+    }
+
     if (micOK && audioBuffer && audioCaptured < MAX_AUDIO_SAMPLES) {
       int32_t raw32[MIC_BUFFER_SIZE];
       size_t bytesRead = 0;
@@ -1159,24 +1192,37 @@ void handleVoiceButton() {
     }
   }
 
+  // Button RELEASED
   if (lastButtonState == LOW && currentButtonState == HIGH) {
     if (voiceState == VS_LISTENING) {
-      Serial.printf("[VOICE] Button released! Captured %u audio samples.\n", audioCaptured);
-      processVoiceRequest();
+      uint32_t heldMs = now - voiceBtnDownMs;
+      String query;
+      if (heldMs < 1200) {
+        query = "What is my heart rate?";
+        Serial.println("[VOICE] Mode: Heart Rate Only");
+      } else if (heldMs < 2500) {
+        query = "What is my body temperature?";
+        Serial.println("[VOICE] Mode: Temperature Only");
+      } else {
+        query = "When is my next medicine?";
+        Serial.println("[VOICE] Mode: Next Medicine Only");
+      }
+      processVoiceRequest(query);
     }
   }
 
   lastButtonState = currentButtonState;
 }
 
-void processVoiceRequest() {
+void processVoiceRequest(const String& customTranscript) {
   voiceState = VS_PROCESSING;
   updateOLED_State("SMARTCARE+", "AI PROCESSING...", "Please wait");
 
-  // Uninstall INMP441 Microphone I2S0 driver so ESP32 I2S hardware root clock is 100% free for MAX98357A speaker!
+  // Uninstall INMP441 Microphone I2S0 driver so ESP32 I2S hardware root clock is 100% free for speaker!
   stopMicrophone();
 
-  String transcript = "What is my heart rate and vitals?";
+  String transcript = customTranscript.length() > 0 ? customTranscript : "What is my heart rate?";
+  Serial.printf("[VOICE] Executing query: '%s'\n", transcript.c_str());
   streamVoiceResponseAndPlay(transcript);
 }
 

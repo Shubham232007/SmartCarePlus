@@ -84,7 +84,7 @@ export const authorizeDoctorPatientAccess = async (req: AuthenticatedRequest, re
       return;
     }
 
-    const targetPatientId = req.params.id || req.params.patientId || req.query.patientId;
+    const targetPatientId = String(req.params.id || req.params.patientId || req.query.patientId || '');
 
     if (!targetPatientId) {
       res.status(400).json({ success: false, message: 'Patient identifier required.', errorCode: 'MISSING_PATIENT_ID' });

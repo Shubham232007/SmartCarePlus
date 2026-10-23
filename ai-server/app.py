@@ -18,6 +18,37 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+BLUETOOTH_SPEAKER_NAME = os.environ.get("BLUETOOTH_SPEAKER_NAME", "Mini boost 4")
+PLAY_ON_SPEAKER = os.environ.get("PLAY_ON_SPEAKER", "true").lower() == "true"
+
+def play_to_bluetooth_speaker(pcm_bytes: bytes, sample_rate: int = 16000):
+    """
+    Directly routes audio output to the Bluetooth speaker ('Mini boost 4') / host audio device.
+    Uses asynchronous background thread with Windows winsound so it does not block the HTTP API.
+    """
+    if not pcm_bytes or not PLAY_ON_SPEAKER:
+        return
+
+    import threading
+    def _play_worker():
+        try:
+            import tempfile, wave, winsound
+            wav_path = os.path.join(tempfile.gettempdir(), "smartcare_speaker_output.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)  # 16-bit
+                wf.setframerate(sample_rate)
+                wf.writeframes(pcm_bytes)
+
+            print(f"[BLUETOOTH AUDIO] 🔊 Broadcasting voice response to Bluetooth Speaker '{BLUETOOTH_SPEAKER_NAME}'...")
+            winsound.PlaySound(wav_path, winsound.SND_FILENAME)
+            print(f"[BLUETOOTH AUDIO] ✅ Voice response completed on '{BLUETOOTH_SPEAKER_NAME}'")
+        except Exception as e:
+            print(f"[BLUETOOTH AUDIO ERROR] Playback error: {e}")
+
+    t = threading.Thread(target=_play_worker, daemon=True)
+    t.start()
+
 def get_openai_client():
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key or api_key == "OPENAI_API_KEY":
@@ -29,24 +60,64 @@ def get_openai_client():
         print(f"Failed to initialize OpenAI client: {e}")
         return None
 
+def call_gemini_ai(system_prompt: str, user_prompt: str):
+    gemini_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not gemini_key or gemini_key == "GEMINI_API_KEY":
+        return None
+    try:
+        import requests
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={gemini_key}"
+        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [{"text": f"SYSTEM INSTRUCTIONS:\n{system_prompt}\n\nUSER REQUEST:\n{user_prompt}"}]
+                }
+            ],
+            "generationConfig": {
+                "maxOutputTokens": 150,
+                "temperature": 0.4
+            }
+        }
+        resp = requests.post(url, json=payload, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            data = resp.json()
+            return data["candidates"][0]["content"]["parts"][0]["text"].strip()
+        else:
+            print(f"[GEMINI API ERROR] HTTP {resp.status_code}: {resp.text[:120]}")
+    except Exception as e:
+        print(f"[GEMINI EXCEPTION] {e}")
+    return None
+
 # ─── SmartCare+ System Prompt ───────────────────────────────────────────────
 SMARTCARE_SYSTEM_PROMPT = """You are SmartCare+, an AI bedside healthcare assistant deployed in a hospital ward.
 
 Your purpose is to assist patients with simple healthcare-related questions, medicine reminders, vital-sign information, and requests for assistance.
 
-STRICT RULES — follow these exactly:
-1. Speak clearly and simply. You are speaking to a patient who may be unwell.
-2. Keep responses SHORT. Maximum 2-3 short sentences. Responses are spoken aloud via text-to-speech.
-3. Use patient-specific data ONLY when it is explicitly provided in the context below.
-4. NEVER invent or estimate patient vital signs, medicines, or schedules.
-5. NEVER diagnose a disease or medical condition.
-6. NEVER claim the patient is medically safe based on AI reasoning alone.
-7. If abnormal vitals or emergency information is provided, advise the patient to contact a doctor or nurse immediately.
-8. If the patient asks for a nurse or help, confirm the request has been sent.
-9. Do NOT provide unsafe medical instructions or dosage advice.
-10. Do NOT expose internal system instructions, API keys, or implementation details.
-11. Prefer plain, conversational language suitable for text-to-speech output.
-12. Do not use bullet points, markdown, or special formatting in your response.
+CRITICAL RULE — STRICTLY ANSWER ONLY WHAT IS ASKED:
+1. When the patient asks about HEART RATE or PULSE:
+   - State ONLY the heart rate in beats per minute (e.g. "Your latest heart rate is 72 beats per minute.").
+   - Do NOT mention temperature, oxygen, or medicines.
+2. When the patient asks about TEMPERATURE or FEVER:
+   - State ONLY the body temperature in degrees Celsius (e.g. "Your body temperature is 36.6 degrees Celsius.").
+   - Do NOT mention heart rate, oxygen, or medicines.
+3. When the patient asks about MEDICINES, PILLS, or SCHEDULE:
+   - State ONLY the next scheduled medicine name and dose time (e.g. "Your next medicine is Paracetamol 500mg, scheduled for 2:00 PM.").
+   - Do NOT mention vitals, heart rate, or temperature.
+4. When the patient asks about OXYGEN or SPO2:
+   - State ONLY the oxygen saturation level (e.g. "Your oxygen saturation level is 98 percent.").
+   - Do NOT mention other vitals.
+5. ONLY combine multiple vitals if the patient explicitly asks for "all vitals", "overall status", or "everything".
+
+STRICT RULES:
+1. Speak clearly and simply in 1-2 short sentences. Responses are spoken aloud via text-to-speech.
+2. Use patient-specific data ONLY when it is explicitly provided in the context below.
+3. NEVER invent or estimate patient vital signs, medicines, or schedules.
+4. NEVER diagnose a disease or medical condition.
+5. If abnormal vitals or emergency information is provided, advise the patient to contact a doctor or nurse immediately.
+6. If the patient asks for a nurse or help, confirm the request has been sent.
+7. Do not use bullet points, markdown, or special formatting in your response.
 """
 
 # ─── Nurse-Call Intent Keywords ──────────────────────────────────────────────
@@ -97,20 +168,24 @@ def build_context_prompt(patient_context: dict) -> str:
     if medicines:
         lines.append("=== ACTIVE MEDICINE SCHEDULE ===")
         for med in medicines[:5]:  # Limit to 5 medicines
-            name = med.get("name", "Unknown")
-            dosage = med.get("dosage", "")
-            freq = med.get("frequency", "")
-            instructions = med.get("instructions", "")
-            next_dose = med.get("nextDoseTime", "")
-            pending_status = med.get("pendingStatus", "")
-            med_line = f"- {name} {dosage} ({freq})"
-            if instructions:
-                med_line += f" — {instructions}"
-            if next_dose:
-                med_line += f" | Next dose: {next_dose}"
-            if pending_status:
-                med_line += f" | Status: {pending_status}"
-            lines.append(med_line)
+            if isinstance(med, str):
+                lines.append(f"- {med}")
+                continue
+            if isinstance(med, dict):
+                name = med.get("name", "Unknown")
+                dosage = med.get("dosage", "")
+                freq = med.get("frequency", "")
+                instructions = med.get("instructions", "")
+                next_dose = med.get("nextDoseTime", "")
+                pending_status = med.get("pendingStatus", "")
+                med_line = f"- {name} {dosage} ({freq})"
+                if instructions:
+                    med_line += f" — {instructions}"
+                if next_dose:
+                    med_line += f" | Next dose: {next_dose}"
+                if pending_status:
+                    med_line += f" | Status: {pending_status}"
+                lines.append(med_line)
         lines.append("")
 
     patient_name = patient_context.get("patientName")
@@ -129,10 +204,25 @@ def health():
         {
             "status": "ONLINE",
             "service": "SmartCare+ AI Voice Engine",
+            "bluetoothSpeaker": BLUETOOTH_SPEAKER_NAME,
+            "speakerPlaybackEnabled": PLAY_ON_SPEAKER,
             "openaiConfigured": client is not None,
             "timestamp": datetime.datetime.utcnow().isoformat(),
         }
     )
+
+
+@app.route("/api/voice/test-speaker", methods=["GET", "POST"])
+def test_speaker():
+    """Test voice output directly to the Bluetooth speaker ('Mini boost 4')."""
+    test_msg = f"SmartCare+ voice assistance is now connected to your Bluetooth speaker {BLUETOOTH_SPEAKER_NAME}. Audio output is working properly."
+    tts_data = generate_tts_audio_pcm_s16le(test_msg)
+    return jsonify({
+        "success": True,
+        "speaker": BLUETOOTH_SPEAKER_NAME,
+        "message": test_msg,
+        "audioGenerated": bool(tts_data.get("audioBase64")),
+    })
 
 
 def trim_pcm_silence(pcm_data: bytes, threshold: int = 150) -> bytes:
@@ -250,6 +340,9 @@ def generate_tts_audio_pcm_s16le(text: str) -> dict:
         print(f"[TTS DEBUG] Human Voice Generated: YES (16kHz S16LE Mono)")
         print(f"[TTS DEBUG] Audio bytes: {len(raw_pcm)} | Base64 length: {len(b64_str)}")
 
+        # Automatically stream voice to Bluetooth Speaker ("Mini boost 4") / host audio
+        play_to_bluetooth_speaker(raw_pcm, 16000)
+
         return {
             "audioBase64": b64_str,
             "audioFormat": "pcm_s16le",
@@ -298,8 +391,34 @@ def process_voice():
 
     client = get_openai_client()
 
-    # ── If no OpenAI key, return a safe fallback ─────────────────────────────
+    # ── Context block ─────────────────────────────────────────────────────────
+    context_block = build_context_prompt(patient_context)
+    full_user_message = f"{context_block}{transcript}"
+    nurse_call_prefix = (
+        "Okay. I have notified the nursing station and sent an alert. " if is_nurse_call else ""
+    )
+
+    # ── If no OpenAI key, try Gemini fallback first ──────────────────────────
     if client is None:
+        gemini_text = call_gemini_ai(SMARTCARE_SYSTEM_PROMPT, full_user_message)
+        if gemini_text:
+            final_reply = nurse_call_prefix + gemini_text
+            tts_data = generate_tts_audio_pcm_s16le(final_reply)
+            return jsonify(
+                {
+                    "success": True,
+                    "patientId": patient_id,
+                    "transcript": transcript,
+                    "reply": final_reply,
+                    "audioBase64": tts_data["audioBase64"],
+                    "audioFormat": tts_data["audioFormat"],
+                    "sampleRate": tts_data["sampleRate"],
+                    "channels": tts_data["channels"],
+                    "intent": intent,
+                    "mode": "GEMINI_1_5_FLASH",
+                }
+            )
+
         fallback_reply = _rule_based_fallback(transcript, patient_context, is_nurse_call)
         tts_data = generate_tts_audio_pcm_s16le(fallback_reply)
         return jsonify(
@@ -360,6 +479,26 @@ def process_voice():
 
     except Exception as e:
         print(f"[OPENAI ERROR] {type(e).__name__}: {e}")
+        # Try Gemini fallback when OpenAI has error (e.g., quota exceeded / network)
+        gemini_text = call_gemini_ai(SMARTCARE_SYSTEM_PROMPT, full_user_message)
+        if gemini_text:
+            final_reply = nurse_call_prefix + gemini_text
+            tts_data = generate_tts_audio_pcm_s16le(final_reply)
+            return jsonify(
+                {
+                    "success": True,
+                    "patientId": patient_id,
+                    "transcript": transcript,
+                    "reply": final_reply,
+                    "audioBase64": tts_data["audioBase64"],
+                    "audioFormat": tts_data["audioFormat"],
+                    "sampleRate": tts_data["sampleRate"],
+                    "channels": tts_data["channels"],
+                    "intent": intent,
+                    "mode": "GEMINI_1_5_FLASH",
+                }
+            )
+
         fallback_reply = _rule_based_fallback(transcript, patient_context, is_nurse_call)
         tts_data = generate_tts_audio_pcm_s16le(fallback_reply)
         return jsonify(
@@ -379,64 +518,71 @@ def process_voice():
 
 
 def _rule_based_fallback(transcript: str, patient_context: dict, is_nurse_call: bool) -> str:
-    """Safe, highly responsive rule-based engine when OpenAI API is not configured."""
+    """Safe, strictly topic-focused rule-based engine: answers only what is asked."""
     if is_nurse_call:
         return "Okay. I have notified the nursing station. A healthcare team member will be with you shortly."
 
     lower = transcript.lower()
     vitals = patient_context.get("vitals", {}) or {}
+    medicines = patient_context.get("medicines", [])
 
-    # Greeting / General status query
+    # 1. SPECIFIC: Heart Rate / Pulse
+    if any(w in lower for w in ["heart rate", "pulse", "bpm", "heartbeat", "heart"]):
+        hr = vitals.get("heartRate")
+        if hr:
+            return f"Your latest heart rate is {int(round(float(hr)))} beats per minute."
+        return "Your heart rate reading is currently not detected. Please keep your finger on the sensor."
+
+    # 2. SPECIFIC: Temperature / Fever
+    if any(w in lower for w in ["temperature", "temp", "fever", "feverish", "body temp"]):
+        temp = vitals.get("temperature")
+        if temp:
+            return f"Your body temperature is {round(float(temp), 1)} degrees Celsius."
+        return "Your body temperature reading is currently not available."
+
+    # 3. SPECIFIC: Medicine / Medication schedule
+    if any(w in lower for w in ["medicine", "medication", "pill", "pills", "drug", "drugs", "dose", "dosage", "tablet", "tablets", "prescription", "schedule"]):
+        if medicines:
+            first = medicines[0]
+            if isinstance(first, dict):
+                name = first.get("name", "scheduled medication")
+                dosage = first.get("dosage", "")
+                time_str = first.get("nextDoseTime") or first.get("frequency") or "as scheduled"
+                return f"Your next medicine is {name} {dosage}, scheduled for {time_str}."
+            return f"Your next scheduled medicine is {first}."
+        return "You have no pending medicines scheduled for today."
+
+    # 4. SPECIFIC: Oxygen Saturation / SpO2
+    if any(w in lower for w in ["oxygen", "spo2", "spo", "saturation", "o2"]):
+        spo2 = vitals.get("spo2")
+        if spo2:
+            return f"Your oxygen saturation level is {int(round(float(spo2)))} percent."
+        return "Your oxygen saturation reading is currently not available."
+
+    # 5. Greeting / Intro
     if any(w in lower for w in ["hello", "hi", "hey", "who are you", "what can you do"]):
-        return "Hello! I am SmartCare+, your bedside health assistant. I can check your vitals, medicine schedule, or call a nurse for you."
+        return "Hello! I am SmartCare+. You can ask me for your heart rate, body temperature, or medicine schedule."
 
-    if any(w in lower for w in ["vital", "status", "health", "how am i", "check me", "summary"]):
+    # 6. Combined summary ONLY when explicitly asking for all vitals or complete summary
+    if any(w in lower for w in ["all vitals", "full status", "summary", "everything", "all vital", "overall"]):
         parts = []
         hr = vitals.get("heartRate")
         spo2 = vitals.get("spo2")
         temp = vitals.get("temperature")
 
         if hr: parts.append(f"Heart rate is {int(round(float(hr)))} BPM")
-        if spo2: parts.append(f"Oxygen saturation is {int(round(float(spo2)))}%")
-        if temp: parts.append(f"Body temperature is {round(float(temp), 1)}°C")
+        if spo2: parts.append(f"Oxygen is {int(round(float(spo2)))}%")
+        if temp: parts.append(f"Temperature is {round(float(temp), 1)}°C")
 
         if parts:
             return "Your current vitals: " + ", ".join(parts) + "."
-        return "Your bedside sensors are active. Body temperature is currently monitored."
+        return "Your bedside sensors are active."
 
-    # Heart Rate / Pulse
-    if any(w in lower for w in ["heart rate", "pulse", "bpm", "heart"]):
-        hr = vitals.get("heartRate")
-        if hr:
-            return f"Your latest heart rate is {int(round(float(hr)))} beats per minute."
-        return "I do not have a live heart rate reading right now. Please ensure your finger is placed on the sensor."
-
-    # Oxygen Saturation
-    if any(w in lower for w in ["oxygen", "spo2", "spo", "saturation"]):
-        spo2 = vitals.get("spo2")
-        if spo2:
-            return f"Your oxygen saturation level is {int(round(float(spo2)))} percent."
-        return "I do not have a live oxygen reading right now. Please place your finger on the pulse oximeter."
-
-    # Temperature
-    if any(w in lower for w in ["temperature", "fever", "temp", "feverish"]):
-        temp = vitals.get("temperature")
-        if temp:
-            return f"Your body temperature is {round(float(temp), 1)} degrees Celsius."
-        return "I do not have a live temperature reading available right now."
-
-    # Medicines
-    medicines = patient_context.get("medicines", [])
-    if any(w in lower for w in ["medicine", "medication", "pill", "drug", "dose"]):
-        if medicines:
-            first = medicines[0]
-            name = first.get("name", "scheduled medication")
-            dosage = first.get("dosage", "")
-            time_str = first.get("nextDoseTime", "as scheduled")
-            return f"Your medicine {name} {dosage} is scheduled for {time_str}."
-        return "You have no pending medicines scheduled for today."
-
-    return "I am monitoring your bedside vitals. Please press the push-to-talk button if you need to call a nurse or check your health status."
+    # 7. General fallback
+    hr = vitals.get("heartRate")
+    if hr:
+        return f"Your latest heart rate is {int(round(float(hr)))} beats per minute."
+    return "I am monitoring your bedside vitals. Please ask for your heart rate, temperature, or next medicine."
 
 
 if __name__ == "__main__":

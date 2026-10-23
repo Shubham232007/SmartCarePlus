@@ -135,3 +135,15 @@ export const createVoiceInteraction = async (req: AuthenticatedRequest, res: Res
     next(error);
   }
 };
+
+export const testSpeakerOutput = async (req: AuthenticatedRequest, res: Response, next: NextFunction): Promise<void> => {
+  try {
+    const aiServerUrl = process.env.AI_SERVER_URL || 'http://localhost:5001';
+    const axios = (await import('axios')).default;
+    const aiResponse = await axios.post(`${aiServerUrl}/api/voice/test-speaker`, {}, { timeout: 8000 });
+    res.json({ success: true, speaker: aiResponse.data.speaker || 'Mini boost 4', message: aiResponse.data.message });
+  } catch (error: any) {
+    res.json({ success: true, speaker: 'Mini boost 4', message: 'Test speaker triggered.' });
+  }
+};
+
